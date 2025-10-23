@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>온체인 투표 DApp</title>
+  <script src="https://cdn.jsdelivr.net/npm/ethers@6.7.0/dist/ethers.umd.js"></script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; line-height: 1.6; padding: 20px; max-width: 700px; margin: auto; }
+    h1 { color: #333; }
+    button { background-color: #007aff; color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer; font-size: 14px; margin-left: 10px; }
+    button:hover { background-color: #0056b3; }
+    #connectBtn { background-color: #f0ad4e; font-size: 16px; padding: 12px 20px; }
+    #connectBtn:hover { background-color: #ec971f; }
+    #candidates div { background-color: #f9f9f9; border: 1px solid #ddd; padding: 15px; margin-bottom: 10px; border-radius: 5px; display: flex; justify-content: space-between; align-items: center; }
+    #status { font-family: "Courier New", Courier, monospace; background-color: #eee; padding: 10px; border-radius: 5px; word-wrap: break-word; }
+  </style>
+</head>
+<body>
+
+  <h1>🗳️ 온체인 투표 DApp</h1>
+  <button id="connectBtn" onclick="connectWallet()">🦊 메타마스크 연결</button>
+  
+  <hr>
+
+  <h2>후보자 목록</h2>
+  <div id="candidates">
+    <p>지갑을 먼저 연결해주세요...</p>
+  </div>
+  
+  <h3>상태 메시지</h3>
+  <pre id="status">대기 중...</pre>
+
+  <script>
+    // 1. 사용자님이 제공한 컨트랙트 주소
+    const contractAddress = "0xf89107c46eb32CF8A7a0880790c988F74B4fD048";
+
+    // 2. 사용자님이 제공한 ABI (대괄호 한 겹 제거)
+    const abi = [
+        {
+            "inputs": [
+                {
+                    "internalType": "uint256",
+                    "name": "num",
+                    "type": "uint256"
+                }
+            ],
+            "name": "elect",
+            "outputs": [],
+            "stateMutability": "nonpayable",
+            "type": "function"
+        },
+        {
+            "inputs": [
+                {
+                    "internalType": "string[]",
+                    "name": "names",
+                    "type": "string[]"
+                }
+            ],
+            "stateMutability": "nonpayable",
+            "type": "constructor"
+        },
+        {
+            "anonymous": false,
+            "inputs": [
+                {
+                    "indexed": false,
+                    "internalType": "address",
+                    "name": "_address",
+                    "type": "address"
+                }
+            ],
+            "name": "voteNowAddress",
+            "type": "event"
+        },
+        {
+            "inputs": [],
+            "name": "currentElect",
+            "outputs": [
+                {
+                    "components": [
+                        {
+                            "internalType": "string",
+                            "name": "name",
+                            "type": "string"
+                        },
+                        {
+                            "internalType": "uint256",
+                            "name": "votenum",
+                            "type": "uint256"
+                        }
+                    ],
+                    "internalType": "struct Vote.Candidate[]",
+                    "name": "",
+                    "type": "tuple[]"
+                }
+            ],
+            "stateMutability": "view",
+            "type": "function"
+        },
+        {
+            "inputs": [
+                {
+                    "internalType": "address",
+                    "name": "",
+                    "type": "address"
+                }
+            ],
+            "name": "voters",
+            "outputs": [
+                {
+                    "internalType": "bool",
+                    "name": "",
+                    "type": "bool"
+                }
+            ],
+            "stateMutability": "view",
+            "type": "function"
+        }
+    ];
+
+    // Ethers.js 객체를 담을 전역 변수
+    let provider, signer, contract;
+    const statusEl = document.getElementById("status");
+    const candidatesEl = document.getElementById("candidates");
+    const connectBtn = document.getElementById("connectBtn");
+
+    // 3. 지갑 연결 함수 (수정됨)
+    async function connectWallet() {
+      if (!window.ethereum) {
+        alert("MetaMask가 설치되어 있지 않습니다! 🦊");
+        return;
+      }
+      
+      try {
+        statusEl.innerText = "🕒 지갑 연결 요청 중...";
+        
+        // Ethers.js v6 방식
+        provider = new ethers.BrowserProvider(window.ethereum);
+        
+        // 1. 명시적으로 계정 접근을 요청합니다. (이 부분이 추가/수정되었습니다)
+        await provider.send("eth_requestAccounts", []);
+        
+        // 2. 서명자(signer)를 가져옵니다.
+        signer = await provider.getSigner();
+        
+        // 3. 컨트랙트 객체 생성
+        contract = new ethers.Contract(contractAddress, abi, signer);
+        
+        const address = await signer.getAddress();
+        statusEl.innerText = `✅ 지갑 연결 완료!\n주소: ${address}`;
+        connectBtn.innerText = "✅ 연결됨";
+        connectBtn.disabled = true;
+
+        // 지갑 연결 성공 시 후보자 목록 불러오기
+        loadCandidates();
+      } catch (err) {
+        console.error("지갑 연결 실패:", err);
+        // 사용자 거부, 계정 없음 등 다양한 오류가 여기에 잡힙니다.
+        let friendlyMessage = err.message;
+        if (err.code === 4001) {
+            friendlyMessage = "사용자가 연결 요청을 거부했습니다.";
+        }
+        statusEl.innerText = `❌ 지갑 연결 실패: ${friendlyMessage}`; 
+      }
+    }
+
+    // 4. 후보자 목록 로드 함수 (currentElect 호출)
+    async function loadCandidates() {
+      if (!contract) return;
+      
+      statusEl.innerText = "🔄 후보자 목록을 불러오는 중...";
+      
+      try {
+        // 컨트랙트의 'currentElect' view 함수 호출
+        const data = await contract.currentElect();
+        
+        candidatesEl.innerHTML = ""; // 기존 목록 비우기
+        
+        if (data.length === 0) {
+            candidatesEl.innerHTML = "<p>등록된 후보자가 없습니다.</p>";
+            statusEl.innerText = "ℹ️ 후보자 목록을 불러왔으나, 등록된 후보가 없습니다.";
+            return;
+        }
+
+        data.forEach((candidate, index) => {
+          const div = document.createElement("div");
+          // candidate 객체는 ABI에 정의된 대로 { name: '이름', votenum: 0n } 형태입니다.
+          // BigInt(0n)를 숫자로 변환하기 위해 .toString() 사용
+          div.innerHTML = `
+            <span><b>${candidate.name}</b> — ${candidate.votenum.toString()}표</span>
+            <button onclick="vote(${index})">투표하기</button>
+          `;
+          candidatesEl.appendChild(div);
+        });
+
+        statusEl.innerText = "✅ 후보자 목록 로드 완료!";
+      } catch (err) {
+        console.error("후보자 로드 오류:", err);
+        statusEl.innerText = `❌ 후보자 로드 오류: ${err.message}`;
+      }
+    }
+
+    // 5. 투표 함수 (elect 호출)
+    async function vote(index) {
+      if (!contract) return alert("지갑을 먼저 연결해주세요.");
+
+      try {
+        statusEl.innerText = `🕒 ${index}번 후보에게 투표 트랜잭션 전송 중...`;
+        
+        // 컨트랙트의 'elect' 쓰기 함수 호출
+        const tx = await contract.elect(index);
+        
+        statusEl.innerText = "🔄 트랜잭션이 채굴되기를 기다리는 중... (1/1)";
+        
+        // 트랜잭션이 블록에 포함될 때까지 대기
+        await tx.wait();
+        
+        statusEl.innerText = `✅ ${index}번 후보에게 투표 완료! 🗳️\n새 득표 현황을 불러옵니다...`;
+        
+        // 투표 완료 후 후보자 목록 새로고침
+        loadCandidates();
+        
+      } catch (err) {
+        console.error("투표 오류:", err);
+        // 사용자가 트랜잭션을 거부했거나, 이미 투표한 경우(voters 확인) 등
+        let errorMessage = err.message;
+        if (err.data?.message) {
+            errorMessage = err.data.message;
+        } else if (err.reason) {
+            errorMessage = err.reason;
+        }
+        statusEl.innerText = `❌ 투표 오류 발생: ${errorMessage}`;
+      }
+    }
+  </script>
+</body>
+</html>
